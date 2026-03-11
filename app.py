@@ -8,7 +8,7 @@ from datetime import datetime
 from html import escape
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import requests
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
@@ -65,12 +65,17 @@ class TracerouteWorker(QThread):
         self,
         target_ip: str,
         ip_mode: str = "auto",
+        geo_provider: str = "ip-api",
+        geo_cache_path: str = "geo_cache.json",
         max_hops: int = 25,
         timeout_s: int = 2,
     ) -> None:
         super().__init__()
         self.target_ip = target_ip.strip()
         self.ip_mode = ip_mode
+        self.geo_provider = geo_provider
+        self.geo_cache_path = Path(geo_cache_path)
+        self.geo_cache: Dict[str, dict] = self._load_geo_cache()
         self.max_hops = max_hops
         self.timeout_s = timeout_s
 
@@ -125,6 +130,7 @@ class TracerouteWorker(QThread):
             enriched.append(hop)
             self.hop_found.emit(hop)
 
+        self._save_geo_cache()
         self.finished_ok.emit(enriched)
 
     @staticmethod
@@ -297,7 +303,19 @@ class TracerouteWorker(QThread):
         return packet[0], packet[1]
 
     def _geolocate(self, ip: str) -> Optional[dict]:
-        # Servicio sin API key para demo; puede tener límites de uso.
+        if ip in self.geo_cache:
+            return self.geo_cache[ip]
+
+        if self.geo_provider == "ipwhois":
+            data = self._geolocate_ipwhois(ip)
+        else:
+            data = self._geolocate_ip_api(ip)
+
+        if data:
+            self.geo_cache[ip] = data
+        return data
+
+    def _geolocate_ip_api(self, ip: str) -> Optional[dict]:
         url = (
             f"http://ip-api.com/json/{ip}"
             "?fields=status,country,city,lat,lon,isp,org,as,asname,reverse,mobile,proxy,hosting"
@@ -313,6 +331,35 @@ class TracerouteWorker(QThread):
         except requests.RequestException:
             return None
 
+    def _geolocate_ipwhois(self, ip: str) -> Optional[dict]:
+        # https://ipwho.is/{ip}
+        url = f"https://ipwho.is/{ip}"
+        try:
+            resp = requests.get(url, timeout=5)
+            if resp.status_code != 200:
+                return None
+            raw = resp.json()
+            if not raw.get("success", False):
+                return None
+            connection = raw.get("connection", {}) or {}
+            return {
+                "status": "success",
+                "country": raw.get("country", ""),
+                "city": raw.get("city", ""),
+                "lat": raw.get("latitude"),
+                "lon": raw.get("longitude"),
+                "isp": connection.get("isp", ""),
+                "org": connection.get("org", ""),
+                "as": connection.get("asn", ""),
+                "asname": connection.get("domain", ""),
+                "reverse": "",
+                "mobile": False,
+                "proxy": False,
+                "hosting": False,
+            }
+        except requests.RequestException:
+            return None
+
     @staticmethod
     def _network_type_from_flags(mobile: bool, proxy: bool, hosting: bool) -> str:
         kinds = []
@@ -323,6 +370,24 @@ class TracerouteWorker(QThread):
         if proxy:
             kinds.append("proxy/vpn")
         return ", ".join(kinds) if kinds else "residential/unknown"
+
+    def _load_geo_cache(self) -> Dict[str, dict]:
+        if not self.geo_cache_path.exists():
+            return {}
+        try:
+            data = json.loads(self.geo_cache_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _save_geo_cache(self) -> None:
+        try:
+            self.geo_cache_path.write_text(
+                json.dumps(self.geo_cache, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
 
 
 class HopsWindow(QMainWindow):
@@ -416,6 +481,12 @@ class MainWindow(QMainWindow):
         self.ip_mode_combo.setCurrentText("auto")
         top.addWidget(self.ip_mode_combo)
 
+        top.addWidget(QLabel("Geo:"))
+        self.geo_provider_combo = QComboBox()
+        self.geo_provider_combo.addItems(["ip-api", "ipwhois"])
+        self.geo_provider_combo.setCurrentText("ip-api")
+        top.addWidget(self.geo_provider_combo)
+
         self.rtt_limit_input = QLineEdit("120")
         self.rtt_limit_input.setMaximumWidth(70)
         self.rtt_limit_input.setToolTip("Umbral RTT medio por salto (ms)")
@@ -494,6 +565,8 @@ class MainWindow(QMainWindow):
         self.worker = TracerouteWorker(
             target_ip=target,
             ip_mode=self.ip_mode_combo.currentText(),
+            geo_provider=self.geo_provider_combo.currentText(),
+            geo_cache_path="geo_cache.json",
         )
         self.worker.hop_found.connect(self.on_hop)
         self.worker.finished_ok.connect(self.on_finish)

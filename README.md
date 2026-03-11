@@ -12,6 +12,7 @@ Esta aplicación en Python permite:
 - Activar modo continuo para ejecutar trazas periódicas cada X minutos.
 - Agrupar nodos en mapa con clustering y spiderfy al acercar/expandir.
 - Enriquecer nodos con AS Name, reverse DNS y tipo de red (mobile/hosting/proxy).
+- Elegir proveedor de geolocalización (`ip-api` o `ipwhois`) con caché local en `geo_cache.json`.
 
 ## Requisitos
 - Python 3.10+
