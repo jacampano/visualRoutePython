@@ -1,0 +1,29 @@
+# App de escritorio: traceroute sobre mapa mundial
+
+Esta aplicación en Python permite:
+- Introducir una IP de destino.
+- Ejecutar traceroute interno (implementado en Python, sin depender de `traceroute`/`tracert` del sistema).
+- Mostrar los saltos geolocalizados en un mapa del mundo.
+- Abrir una ventana adicional con detalle de nodos y tiempos de respuesta.
+
+## Requisitos
+- Python 3.10+
+- Permisos de administrador/root para abrir sockets ICMP raw (necesarios para traceroute).
+
+## Instalación
+```bash
+python -m venv .venv
+source .venv/bin/activate  # En Windows: .venv\\Scripts\\activate
+pip install -r requirements.txt
+```
+
+## Ejecución
+```bash
+python app.py
+```
+
+## Notas
+- La geolocalización usa `ip-api.com` (sin API key), apto para prototipos.
+- El mapa principal usa OpenStreetMap (Leaflet + tiles OSM).
+- Si Leaflet/CDN o red fallan, la app activa automáticamente un mapa offline de respaldo.
+- Algunos routers bloquean ICMP o no exponen IP pública; esos saltos pueden no geolocalizarse.
