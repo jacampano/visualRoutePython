@@ -14,6 +14,7 @@ Esta aplicación en Python permite:
 - Enriquecer nodos con AS Name, reverse DNS y tipo de red (mobile/hosting/proxy).
 - Elegir proveedor de geolocalización (`ip-api` o `ipwhois`) con caché local en `geo_cache.json`.
 - Usar tabla avanzada con búsqueda, filtro por ciudad y resaltado de diferencias frente a la traza anterior.
+- Empaquetar ejecutables desktop con PyInstaller para macOS/Linux/Windows.
 
 ## Requisitos
 - Python 3.10+
@@ -30,6 +31,24 @@ pip install -r requirements.txt
 ```bash
 python app.py
 ```
+
+## Empaquetado (PyInstaller)
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+./packaging/build_mac_linux.sh
+```
+
+Windows (PowerShell):
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+.\packaging\build_windows.ps1
+```
+
+El binario resultante queda en `dist/visualRoutePython/`.
 
 ## Notas
 - La geolocalización usa `ip-api.com` (sin API key), apto para prototipos.

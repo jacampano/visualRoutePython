@@ -5,3 +5,6 @@ __pycache__/
 geo_cache.json
 trace_history.json
 exports/
+build/
+dist/
+*.spec
