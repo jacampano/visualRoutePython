@@ -11,6 +11,7 @@ Esta aplicación en Python permite:
 - Seleccionar modo de resolución/traza de IP: `auto`, `ipv4` o `ipv6`.
 - Activar modo continuo para ejecutar trazas periódicas cada X minutos.
 - Agrupar nodos en mapa con clustering y spiderfy al acercar/expandir.
+- Enriquecer nodos con AS Name, reverse DNS y tipo de red (mobile/hosting/proxy).
 
 ## Requisitos
 - Python 3.10+

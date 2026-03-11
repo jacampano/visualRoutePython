@@ -42,6 +42,12 @@ class HopInfo:
     isp: str = ""
     org: str = ""
     asn: str = ""
+    asname: str = ""
+    reverse_dns: str = ""
+    mobile: bool = False
+    proxy: bool = False
+    hosting: bool = False
+    network_type: str = ""
     lat: Optional[float] = None
     lon: Optional[float] = None
 
@@ -106,6 +112,14 @@ class TracerouteWorker(QThread):
                     hop.isp = geo.get("isp", "")
                     hop.org = geo.get("org", "")
                     hop.asn = geo.get("as", "")
+                    hop.asname = geo.get("asname", "")
+                    hop.reverse_dns = geo.get("reverse", "")
+                    hop.mobile = bool(geo.get("mobile", False))
+                    hop.proxy = bool(geo.get("proxy", False))
+                    hop.hosting = bool(geo.get("hosting", False))
+                    hop.network_type = self._network_type_from_flags(
+                        hop.mobile, hop.proxy, hop.hosting
+                    )
                     hop.lat = geo.get("lat")
                     hop.lon = geo.get("lon")
             enriched.append(hop)
@@ -286,7 +300,7 @@ class TracerouteWorker(QThread):
         # Servicio sin API key para demo; puede tener límites de uso.
         url = (
             f"http://ip-api.com/json/{ip}"
-            "?fields=status,country,city,lat,lon,isp,org,as"
+            "?fields=status,country,city,lat,lon,isp,org,as,asname,reverse,mobile,proxy,hosting"
         )
         try:
             resp = requests.get(url, timeout=5)
@@ -299,6 +313,17 @@ class TracerouteWorker(QThread):
         except requests.RequestException:
             return None
 
+    @staticmethod
+    def _network_type_from_flags(mobile: bool, proxy: bool, hosting: bool) -> str:
+        kinds = []
+        if mobile:
+            kinds.append("mobile")
+        if hosting:
+            kinds.append("hosting")
+        if proxy:
+            kinds.append("proxy/vpn")
+        return ", ".join(kinds) if kinds else "residential/unknown"
+
 
 class HopsWindow(QMainWindow):
     def __init__(self) -> None:
@@ -310,9 +335,19 @@ class HopsWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
-            ["Salto", "IP", "RTT avg (ms)", "RTTs (ms)", "Ciudad", "País", "Coordenadas"]
+            [
+                "Salto",
+                "IP",
+                "RTT avg (ms)",
+                "RTTs (ms)",
+                "Ciudad",
+                "País",
+                "Owner",
+                "ASN",
+                "Coordenadas",
+            ]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -336,6 +371,8 @@ class HopsWindow(QMainWindow):
             ", ".join(f"{v:.2f}" for v in hop.rtts_ms) if hop.rtts_ms else "N/A",
             hop.city or "N/A",
             hop.country or "N/A",
+            hop.org or hop.isp or "N/A",
+            hop.asn or "N/A",
             coords or "N/A",
         ]
         for col, val in enumerate(values):
@@ -514,6 +551,9 @@ class MainWindow(QMainWindow):
                     "owner": owner,
                     "isp": isp,
                     "asn": asn,
+                    "asname": hop.asname or "-",
+                    "reverse_dns": hop.reverse_dns or "-",
+                    "network_type": hop.network_type or "-",
                     "rtt": rtt_text,
                 }
             )
@@ -627,6 +667,9 @@ class MainWindow(QMainWindow):
           Propietario: ${{escHtml(hop.owner || "-")}}<br>
           ISP: ${{escHtml(hop.isp || "-")}}<br>
           ASN: ${{escHtml(hop.asn || "-")}}<br>
+          AS Name: ${{escHtml(hop.asname || "-")}}<br>
+          Reverse DNS: ${{escHtml(hop.reverse_dns || "-")}}<br>
+          Tipo red: ${{escHtml(hop.network_type || "-")}}<br>
           RTT avg: ${{escHtml(hop.rtt || "N/A")}}
         </div>
       `;
@@ -996,6 +1039,12 @@ class MainWindow(QMainWindow):
             "isp": hop.isp,
             "org": hop.org,
             "asn": hop.asn,
+            "asname": hop.asname,
+            "reverse_dns": hop.reverse_dns,
+            "mobile": hop.mobile,
+            "proxy": hop.proxy,
+            "hosting": hop.hosting,
+            "network_type": hop.network_type,
             "lat": hop.lat,
             "lon": hop.lon,
         }
@@ -1012,6 +1061,12 @@ class MainWindow(QMainWindow):
             isp=str(data.get("isp", "")),
             org=str(data.get("org", "")),
             asn=str(data.get("asn", "")),
+            asname=str(data.get("asname", "")),
+            reverse_dns=str(data.get("reverse_dns", "")),
+            mobile=bool(data.get("mobile", False)),
+            proxy=bool(data.get("proxy", False)),
+            hosting=bool(data.get("hosting", False)),
+            network_type=str(data.get("network_type", "")),
             lat=data.get("lat"),
             lon=data.get("lon"),
         )
@@ -1218,6 +1273,9 @@ class MainWindow(QMainWindow):
                     "owner",
                     "isp",
                     "asn",
+                    "asname",
+                    "reverse_dns",
+                    "network_type",
                     "lat",
                     "lon",
                 ]
@@ -1235,6 +1293,9 @@ class MainWindow(QMainWindow):
                         hop.org or hop.isp,
                         hop.isp,
                         hop.asn,
+                        hop.asname,
+                        hop.reverse_dns,
+                        hop.network_type,
                         hop.lat if hop.lat is not None else "",
                         hop.lon if hop.lon is not None else "",
                     ]
@@ -1273,6 +1334,8 @@ class MainWindow(QMainWindow):
                 f"<td>{escape(h.country or '-')}</td>"
                 f"<td>{escape(h.org or h.isp or '-')}</td>"
                 f"<td>{escape(h.asn or '-')}</td>"
+                f"<td>{escape(h.asname or '-')}</td>"
+                f"<td>{escape(h.network_type or '-')}</td>"
                 f"<td>{(f'{h.avg_rtt:.2f} ms' if h.avg_rtt is not None else 'N/A')}</td>"
                 "</tr>"
             )
@@ -1302,7 +1365,7 @@ class MainWindow(QMainWindow):
   <table>
     <thead>
       <tr>
-        <th>Salto</th><th>IP</th><th>Host</th><th>Ciudad</th><th>País</th><th>Owner</th><th>ASN</th><th>RTT avg</th>
+        <th>Salto</th><th>IP</th><th>Host</th><th>Ciudad</th><th>País</th><th>Owner</th><th>ASN</th><th>AS Name</th><th>Tipo red</th><th>RTT avg</th>
       </tr>
     </thead>
     <tbody>
