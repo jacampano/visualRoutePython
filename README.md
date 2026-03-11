@@ -10,6 +10,7 @@ Esta aplicación en Python permite:
 - Definir umbrales de calidad (RTT y delta entre saltos) y mostrar alertas automáticas.
 - Seleccionar modo de resolución/traza de IP: `auto`, `ipv4` o `ipv6`.
 - Activar modo continuo para ejecutar trazas periódicas cada X minutos.
+- Agrupar nodos en mapa con clustering y spiderfy al acercar/expandir.
 
 ## Requisitos
 - Python 3.10+

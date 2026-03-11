@@ -533,6 +533,14 @@ class MainWindow(QMainWindow):
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
     crossorigin=""
   />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+  />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+  />
   <style>
     html, body, #map {{
       margin: 0;
@@ -659,6 +667,14 @@ class MainWindow(QMainWindow):
           attribution: "&copy; OpenStreetMap contributors"
         }}).addTo(map);
 
+        const markerLayer = window.L.markerClusterGroup
+          ? L.markerClusterGroup({{
+              spiderfyOnMaxZoom: true,
+              showCoverageOnHover: false,
+              maxClusterRadius: 35
+            }})
+          : L.layerGroup();
+
         if (POINTS.length > 0) {{
           const latlngs = [];
           const grouped = {{}};
@@ -699,16 +715,6 @@ class MainWindow(QMainWindow):
               `;
             }}
 
-            L.circleMarker(latlng, {{
-              radius: 7,
-              color: "#81270f",
-              weight: 1,
-              fillColor: "#d34f2a",
-              fillOpacity: 0.9
-            }}).bindPopup(popupHtml).on("popupopen", function() {{
-              selectGroupedHop(groupId, hops[0].hop);
-            }}).addTo(map);
-
             const hopNumbers = hops.map(h => h.hop).join(",");
             const numIcon = L.divIcon({{
               className: "hop-number",
@@ -716,8 +722,15 @@ class MainWindow(QMainWindow):
               iconSize: [Math.max(20, 10 + hopNumbers.length * 6), 20],
               iconAnchor: [10, 10]
             }});
-            L.marker(latlng, {{ icon: numIcon, interactive: false }}).addTo(map);
+            L.marker(latlng, {{ icon: numIcon }})
+              .bindPopup(popupHtml)
+              .on("popupopen", function() {{
+                selectGroupedHop(groupId, hops[0].hop);
+              }})
+              .addTo(markerLayer);
           }}
+
+          markerLayer.addTo(map);
 
           if (latlngs.length >= 2) {{
             L.polyline(latlngs, {{
@@ -739,9 +752,15 @@ class MainWindow(QMainWindow):
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin=""
-    onload="initMap()"
-    onerror="loadOfflineFallback()"
   ></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script>
+    if (window.L) {{
+      initMap();
+    }} else {{
+      loadOfflineFallback();
+    }}
+  </script>
 </body>
 </html>"""
 
