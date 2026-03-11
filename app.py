@@ -15,6 +15,7 @@ from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -54,21 +55,34 @@ class TracerouteWorker(QThread):
     finished_ok = Signal(list)
     failed = Signal(str)
 
-    def __init__(self, target_ip: str, max_hops: int = 25, timeout_s: int = 2) -> None:
+    def __init__(
+        self,
+        target_ip: str,
+        ip_mode: str = "auto",
+        max_hops: int = 25,
+        timeout_s: int = 2,
+    ) -> None:
         super().__init__()
         self.target_ip = target_ip.strip()
+        self.ip_mode = ip_mode
         self.max_hops = max_hops
         self.timeout_s = timeout_s
 
     def run(self) -> None:
         try:
-            destination_ip = socket.gethostbyname(self.target_ip)
+            destination_ip, family = self._resolve_target(self.target_ip, self.ip_mode)
+        except ValueError as exc:
+            self.failed.emit(str(exc))
+            return
         except socket.gaierror:
             self.failed.emit("No se pudo resolver la IP/host de destino.")
             return
 
         try:
-            hops = self._run_traceroute(destination_ip)
+            if family == socket.AF_INET6:
+                hops = self._run_traceroute_ipv6(destination_ip)
+            else:
+                hops = self._run_traceroute(destination_ip)
         except PermissionError:
             self.failed.emit(
                 "La traza requiere permisos de administrador/root para sockets ICMP."
@@ -99,6 +113,22 @@ class TracerouteWorker(QThread):
 
         self.finished_ok.emit(enriched)
 
+    @staticmethod
+    def _resolve_target(target: str, ip_mode: str) -> tuple[str, int]:
+        family = socket.AF_UNSPEC
+        if ip_mode == "ipv4":
+            family = socket.AF_INET
+        elif ip_mode == "ipv6":
+            family = socket.AF_INET6
+        info = socket.getaddrinfo(target, None, family, socket.SOCK_DGRAM)
+        if not info:
+            raise ValueError("No se pudo resolver el destino.")
+        selected = info[0]
+        addr_family = selected[0]
+        sockaddr = selected[4]
+        ip = sockaddr[0]
+        return ip, addr_family
+
     def _run_traceroute(self, destination_ip: str) -> List[HopInfo]:
         hops: List[HopInfo] = []
         port = 33434
@@ -111,6 +141,42 @@ class TracerouteWorker(QThread):
 
             for _ in range(probes_per_hop):
                 rtt, responder_ip, is_destination = self._probe(destination_ip, ttl, port)
+                port += 1
+
+                if responder_ip and hop_ip == "*":
+                    hop_ip = responder_ip
+                if rtt is not None:
+                    rtts.append(rtt)
+                if is_destination:
+                    reached_destination = True
+
+            hostname = ""
+            if hop_ip != "*":
+                try:
+                    hostname = socket.gethostbyaddr(hop_ip)[0]
+                except socket.herror:
+                    hostname = ""
+
+            hop = HopInfo(hop=ttl, ip=hop_ip, rtts_ms=rtts, hostname=hostname)
+            hops.append(hop)
+
+            if reached_destination or hop_ip == destination_ip:
+                break
+
+        return hops
+
+    def _run_traceroute_ipv6(self, destination_ip: str) -> List[HopInfo]:
+        hops: List[HopInfo] = []
+        port = 33434
+        probes_per_hop = 3
+
+        for ttl in range(1, self.max_hops + 1):
+            rtts: List[float] = []
+            hop_ip = "*"
+            reached_destination = False
+
+            for _ in range(probes_per_hop):
+                rtt, responder_ip, is_destination = self._probe_ipv6(destination_ip, ttl, port)
                 port += 1
 
                 if responder_ip and hop_ip == "*":
@@ -167,6 +233,40 @@ class TracerouteWorker(QThread):
             send_sock.close()
             recv_sock.close()
 
+    def _probe_ipv6(
+        self, destination_ip: str, ttl: int, port: int
+    ) -> tuple[Optional[float], Optional[str], bool]:
+        recv_sock = socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_ICMPV6)
+        send_sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+
+        try:
+            recv_sock.settimeout(self.timeout_s)
+            recv_sock.bind(("::", port))
+            send_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_UNICAST_HOPS, ttl)
+
+            start = time.perf_counter()
+            send_sock.sendto(b"", (destination_ip, port, 0, 0))
+
+            try:
+                packet, addr = recv_sock.recvfrom(512)
+                elapsed = (time.perf_counter() - start) * 1000.0
+            except socket.timeout:
+                return None, None, False
+
+            icmp_type, icmp_code = self._parse_icmpv6(packet)
+            responder_ip = addr[0] if addr else None
+            reached = bool(
+                responder_ip == destination_ip and icmp_type == 1 and icmp_code == 4
+            )
+            return elapsed, responder_ip, reached
+        except OSError as exc:
+            if exc.errno in (errno.EPERM, errno.EACCES):
+                raise PermissionError from exc
+            raise
+        finally:
+            send_sock.close()
+            recv_sock.close()
+
     @staticmethod
     def _parse_icmp(packet: bytes) -> tuple[Optional[int], Optional[int]]:
         if len(packet) < 28:
@@ -175,6 +275,12 @@ class TracerouteWorker(QThread):
         if len(packet) < ip_header_len + 2:
             return None, None
         return packet[ip_header_len], packet[ip_header_len + 1]
+
+    @staticmethod
+    def _parse_icmpv6(packet: bytes) -> tuple[Optional[int], Optional[int]]:
+        if len(packet) < 2:
+            return None, None
+        return packet[0], packet[1]
 
     def _geolocate(self, ip: str) -> Optional[dict]:
         # Servicio sin API key para demo; puede tener límites de uso.
@@ -264,6 +370,12 @@ class MainWindow(QMainWindow):
         self.ip_input.setPlaceholderText("Ejemplo: 8.8.8.8")
         top.addWidget(self.ip_input, stretch=1)
 
+        top.addWidget(QLabel("IP mode:"))
+        self.ip_mode_combo = QComboBox()
+        self.ip_mode_combo.addItems(["auto", "ipv4", "ipv6"])
+        self.ip_mode_combo.setCurrentText("auto")
+        top.addWidget(self.ip_mode_combo)
+
         self.rtt_limit_input = QLineEdit("120")
         self.rtt_limit_input.setMaximumWidth(70)
         self.rtt_limit_input.setToolTip("Umbral RTT medio por salto (ms)")
@@ -330,7 +442,10 @@ class MainWindow(QMainWindow):
         self.hops_window.clear_rows()
         self._render_map([])
 
-        self.worker = TracerouteWorker(target_ip=target)
+        self.worker = TracerouteWorker(
+            target_ip=target,
+            ip_mode=self.ip_mode_combo.currentText(),
+        )
         self.worker.hop_found.connect(self.on_hop)
         self.worker.finished_ok.connect(self.on_finish)
         self.worker.failed.connect(self.on_fail)
