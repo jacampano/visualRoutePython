@@ -6,6 +6,7 @@ Esta aplicación en Python permite:
 - Mostrar los saltos geolocalizados en un mapa del mundo.
 - Abrir una ventana adicional con detalle de nodos y tiempos de respuesta.
 - Guardar historial local de trazas, cargar la última y comparar las dos más recientes.
+- Exportar la traza actual a JSON/CSV y generar reporte HTML.
 
 ## Requisitos
 - Python 3.10+

@@ -1,4 +1,5 @@
 import errno
+import csv
 import json
 import socket
 import sys
@@ -282,6 +283,14 @@ class MainWindow(QMainWindow):
         self.compare_btn = QPushButton("Comparar últimas")
         self.compare_btn.clicked.connect(self.compare_last_two)
         top.addWidget(self.compare_btn)
+
+        self.export_btn = QPushButton("Exportar JSON/CSV")
+        self.export_btn.clicked.connect(self.export_current_trace)
+        top.addWidget(self.export_btn)
+
+        self.report_btn = QPushButton("Reporte HTML")
+        self.report_btn.clicked.connect(self.export_html_report)
+        top.addWidget(self.report_btn)
 
         layout.addLayout(top)
 
@@ -952,6 +961,143 @@ class MainWindow(QMainWindow):
         if not values:
             return None
         return sum(values) / len(values)
+
+    def export_current_trace(self) -> None:
+        if not self.current_hops:
+            QMessageBox.information(self, "Exportación", "No hay traza actual para exportar.")
+            return
+
+        out_dir = Path("exports")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        json_path = out_dir / f"trace_{stamp}.json"
+        csv_path = out_dir / f"trace_{stamp}.csv"
+
+        target = self.ip_input.text().strip()
+        payload = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "target": target,
+            "hops": [self._hop_to_dict(h) for h in self.current_hops],
+        }
+        json_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        with csv_path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(
+                [
+                    "hop",
+                    "ip",
+                    "hostname",
+                    "avg_rtt_ms",
+                    "rtts_ms",
+                    "city",
+                    "country",
+                    "owner",
+                    "isp",
+                    "asn",
+                    "lat",
+                    "lon",
+                ]
+            )
+            for hop in self.current_hops:
+                writer.writerow(
+                    [
+                        hop.hop,
+                        hop.ip,
+                        hop.hostname,
+                        f"{hop.avg_rtt:.2f}" if hop.avg_rtt is not None else "",
+                        ",".join(f"{v:.2f}" for v in hop.rtts_ms),
+                        hop.city,
+                        hop.country,
+                        hop.org or hop.isp,
+                        hop.isp,
+                        hop.asn,
+                        hop.lat if hop.lat is not None else "",
+                        hop.lon if hop.lon is not None else "",
+                    ]
+                )
+
+        QMessageBox.information(
+            self,
+            "Exportación completada",
+            f"Archivos generados:\n- {json_path}\n- {csv_path}",
+        )
+
+    def export_html_report(self) -> None:
+        if not self.current_hops:
+            QMessageBox.information(self, "Reporte", "No hay traza actual para reportar.")
+            return
+
+        out_dir = Path("exports")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_path = out_dir / f"trace_report_{stamp}.html"
+
+        target = escape(self.ip_input.text().strip() or "-")
+        total = len(self.current_hops)
+        geolocated = len([h for h in self.current_hops if h.lat is not None and h.lon is not None])
+        avg_values = [h.avg_rtt for h in self.current_hops if h.avg_rtt is not None]
+        overall = f"{(sum(avg_values) / len(avg_values)):.2f} ms" if avg_values else "N/A"
+
+        rows = []
+        for h in self.current_hops:
+            rows.append(
+                "<tr>"
+                f"<td>{h.hop}</td>"
+                f"<td>{escape(h.ip)}</td>"
+                f"<td>{escape(h.hostname or '-')}</td>"
+                f"<td>{escape(h.city or '-')}</td>"
+                f"<td>{escape(h.country or '-')}</td>"
+                f"<td>{escape(h.org or h.isp or '-')}</td>"
+                f"<td>{escape(h.asn or '-')}</td>"
+                f"<td>{(f'{h.avg_rtt:.2f} ms' if h.avg_rtt is not None else 'N/A')}</td>"
+                "</tr>"
+            )
+
+        html = f"""<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Reporte de traza</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 24px; color: #1d2b38; }}
+    h1 {{ margin: 0 0 10px 0; }}
+    .meta {{ background: #f2f7fb; border: 1px solid #c6d9ea; border-radius: 8px; padding: 10px 12px; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 14px; }}
+    th, td {{ border: 1px solid #d5e0ea; padding: 7px; text-align: left; font-size: 13px; }}
+    th {{ background: #edf4fb; }}
+    tr:nth-child(even) {{ background: #fafcff; }}
+  </style>
+</head>
+<body>
+  <h1>Reporte de Trazado de Red</h1>
+  <div class="meta">
+    <div><b>Fecha:</b> {escape(datetime.now().isoformat(timespec="seconds"))}</div>
+    <div><b>Destino:</b> {target}</div>
+    <div><b>Saltos:</b> {total} | <b>Geolocalizados:</b> {geolocated} | <b>RTT medio global:</b> {overall}</div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Salto</th><th>IP</th><th>Host</th><th>Ciudad</th><th>País</th><th>Owner</th><th>ASN</th><th>RTT avg</th>
+      </tr>
+    </thead>
+    <tbody>
+      {''.join(rows)}
+    </tbody>
+  </table>
+</body>
+</html>"""
+        report_path.write_text(html, encoding="utf-8")
+
+        QMessageBox.information(
+            self,
+            "Reporte generado",
+            f"Reporte HTML generado:\n- {report_path}",
+        )
 
 
 def main() -> None:
