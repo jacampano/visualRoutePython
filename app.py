@@ -264,6 +264,18 @@ class MainWindow(QMainWindow):
         self.ip_input.setPlaceholderText("Ejemplo: 8.8.8.8")
         top.addWidget(self.ip_input, stretch=1)
 
+        self.rtt_limit_input = QLineEdit("120")
+        self.rtt_limit_input.setMaximumWidth(70)
+        self.rtt_limit_input.setToolTip("Umbral RTT medio por salto (ms)")
+        top.addWidget(QLabel("RTT>"))
+        top.addWidget(self.rtt_limit_input)
+
+        self.jump_limit_input = QLineEdit("40")
+        self.jump_limit_input.setMaximumWidth(70)
+        self.jump_limit_input.setToolTip("Umbral de incremento brusco entre saltos (ms)")
+        top.addWidget(QLabel("Delta>"))
+        top.addWidget(self.jump_limit_input)
+
         self.run_btn = QPushButton("Ejecutar traceroute")
         self.run_btn.clicked.connect(self.start_trace)
         top.addWidget(self.run_btn)
@@ -296,6 +308,10 @@ class MainWindow(QMainWindow):
 
         self.status = QLabel("Listo")
         layout.addWidget(self.status)
+
+        self.alerts_label = QLabel("Alertas: sin datos")
+        self.alerts_label.setStyleSheet("color: #7a5f00;")
+        layout.addWidget(self.alerts_label)
 
         self.web = QWebEngineView()
         layout.addWidget(self.web, stretch=1)
@@ -335,6 +351,7 @@ class MainWindow(QMainWindow):
         geolocated = [h for h in hops if h.lat is not None and h.lon is not None]
         self._render_map(geolocated)
         self._save_trace_to_history(hops)
+        self._evaluate_quality_alerts(hops)
         self.status.setText(
             f"Completado: {len(hops)} saltos detectados, {len(geolocated)} geolocalizados."
         )
@@ -961,6 +978,59 @@ class MainWindow(QMainWindow):
         if not values:
             return None
         return sum(values) / len(values)
+
+    def _get_threshold(self, text: str, fallback: float) -> float:
+        try:
+            value = float(text.strip())
+            if value <= 0:
+                return fallback
+            return value
+        except (ValueError, AttributeError):
+            return fallback
+
+    def _evaluate_quality_alerts(self, hops: List[HopInfo]) -> None:
+        if not hops:
+            self.alerts_label.setText("Alertas: sin datos")
+            return
+
+        rtt_limit = self._get_threshold(self.rtt_limit_input.text(), 120.0)
+        jump_limit = self._get_threshold(self.jump_limit_input.text(), 40.0)
+
+        alerts = []
+        previous_avg: Optional[float] = None
+
+        for hop in hops:
+            avg = hop.avg_rtt
+            if avg is None:
+                alerts.append(f"Salto {hop.hop}: sin respuesta")
+                continue
+
+            if avg > rtt_limit:
+                alerts.append(f"Salto {hop.hop}: RTT alto ({avg:.2f} ms)")
+
+            if previous_avg is not None and (avg - previous_avg) > jump_limit:
+                alerts.append(
+                    f"Salto {hop.hop}: aumento brusco ({previous_avg:.2f} -> {avg:.2f} ms)"
+                )
+
+            # Pérdida estimada por menos de 3 respuestas
+            if len(hop.rtts_ms) < 3:
+                loss_pct = 100.0 * (3 - len(hop.rtts_ms)) / 3.0
+                alerts.append(f"Salto {hop.hop}: pérdida estimada {loss_pct:.0f}%")
+
+            previous_avg = avg
+
+        if alerts:
+            self.alerts_label.setText(f"Alertas: {len(alerts)}")
+            self.alerts_label.setStyleSheet("color: #a32020; font-weight: 600;")
+            QMessageBox.warning(
+                self,
+                "Alertas de calidad de ruta",
+                "\n".join(alerts[:20]),
+            )
+        else:
+            self.alerts_label.setText("Alertas: sin incidencias")
+            self.alerts_label.setStyleSheet("color: #1d6b33; font-weight: 600;")
 
     def export_current_trace(self) -> None:
         if not self.current_hops:
