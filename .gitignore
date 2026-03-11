@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 .DS_Store
+geo_cache.json
+trace_history.json
+exports/
