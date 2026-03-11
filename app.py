@@ -3,8 +3,10 @@ import json
 import socket
 import sys
 import time
+from datetime import datetime
 from html import escape
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional
 
 import requests
@@ -243,7 +245,10 @@ class MainWindow(QMainWindow):
 
         self.worker: Optional[TracerouteWorker] = None
         self.current_hops: List[HopInfo] = []
+        self.trace_history: List[dict] = []
+        self.history_file = Path("trace_history.json")
         self.hops_window = HopsWindow()
+        self._load_history_file()
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -265,6 +270,18 @@ class MainWindow(QMainWindow):
         self.details_btn = QPushButton("Ver detalle de nodos")
         self.details_btn.clicked.connect(self.hops_window.show)
         top.addWidget(self.details_btn)
+
+        self.history_btn = QPushButton("Historial")
+        self.history_btn.clicked.connect(self.show_history_summary)
+        top.addWidget(self.history_btn)
+
+        self.load_last_btn = QPushButton("Cargar última")
+        self.load_last_btn.clicked.connect(self.load_last_trace)
+        top.addWidget(self.load_last_btn)
+
+        self.compare_btn = QPushButton("Comparar últimas")
+        self.compare_btn.clicked.connect(self.compare_last_two)
+        top.addWidget(self.compare_btn)
 
         layout.addLayout(top)
 
@@ -308,6 +325,7 @@ class MainWindow(QMainWindow):
         self.current_hops = list(hops)
         geolocated = [h for h in hops if h.lat is not None and h.lon is not None]
         self._render_map(geolocated)
+        self._save_trace_to_history(hops)
         self.status.setText(
             f"Completado: {len(hops)} saltos detectados, {len(geolocated)} geolocalizados."
         )
@@ -770,6 +788,170 @@ class MainWindow(QMainWindow):
 </html>"""
 
         return html
+
+    def _load_history_file(self) -> None:
+        if not self.history_file.exists():
+            self.trace_history = []
+            return
+        try:
+            data = json.loads(self.history_file.read_text(encoding="utf-8"))
+            self.trace_history = data if isinstance(data, list) else []
+        except (json.JSONDecodeError, OSError):
+            self.trace_history = []
+
+    def _save_history_file(self) -> None:
+        try:
+            self.history_file.write_text(
+                json.dumps(self.trace_history[-30:], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+    @staticmethod
+    def _hop_to_dict(hop: HopInfo) -> dict:
+        return {
+            "hop": hop.hop,
+            "ip": hop.ip,
+            "rtts_ms": hop.rtts_ms,
+            "hostname": hop.hostname,
+            "city": hop.city,
+            "country": hop.country,
+            "isp": hop.isp,
+            "org": hop.org,
+            "asn": hop.asn,
+            "lat": hop.lat,
+            "lon": hop.lon,
+        }
+
+    @staticmethod
+    def _dict_to_hop(data: dict) -> HopInfo:
+        return HopInfo(
+            hop=int(data.get("hop", 0)),
+            ip=str(data.get("ip", "*")),
+            rtts_ms=list(data.get("rtts_ms", [])),
+            hostname=str(data.get("hostname", "")),
+            city=str(data.get("city", "")),
+            country=str(data.get("country", "")),
+            isp=str(data.get("isp", "")),
+            org=str(data.get("org", "")),
+            asn=str(data.get("asn", "")),
+            lat=data.get("lat"),
+            lon=data.get("lon"),
+        )
+
+    def _save_trace_to_history(self, hops: List[HopInfo]) -> None:
+        if not hops:
+            return
+        target = self.ip_input.text().strip()
+        item = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "target": target,
+            "hops": [self._hop_to_dict(h) for h in hops],
+        }
+        self.trace_history.append(item)
+        self.trace_history = self.trace_history[-30:]
+        self._save_history_file()
+
+    def show_history_summary(self) -> None:
+        if not self.trace_history:
+            QMessageBox.information(self, "Historial", "No hay trazas guardadas.")
+            return
+        lines = []
+        for idx, item in enumerate(self.trace_history[-10:], start=1):
+            lines.append(
+                f"{idx}. {item.get('timestamp', '-')} | destino {item.get('target', '-')} | "
+                f"{len(item.get('hops', []))} saltos"
+            )
+        QMessageBox.information(
+            self,
+            "Historial (últimas 10)",
+            "\n".join(lines),
+        )
+
+    def load_last_trace(self) -> None:
+        if not self.trace_history:
+            QMessageBox.information(self, "Historial", "No hay trazas guardadas.")
+            return
+        last = self.trace_history[-1]
+        hops = [self._dict_to_hop(h) for h in last.get("hops", [])]
+        self.current_hops = hops
+        self.hops_window.clear_rows()
+        for hop in hops:
+            self.hops_window.add_hop(hop)
+        geolocated = [h for h in hops if h.lat is not None and h.lon is not None]
+        self._render_map(geolocated)
+        self.ip_input.setText(str(last.get("target", "")))
+        self.status.setText(
+            f"Histórico cargado: {last.get('timestamp', '-')} ({len(hops)} saltos)."
+        )
+
+    def compare_last_two(self) -> None:
+        if len(self.trace_history) < 2:
+            QMessageBox.information(
+                self,
+                "Comparación",
+                "Se necesitan al menos 2 trazas guardadas para comparar.",
+            )
+            return
+
+        prev = self.trace_history[-2]
+        curr = self.trace_history[-1]
+        prev_hops = {int(h.get("hop", 0)): h for h in prev.get("hops", [])}
+        curr_hops = {int(h.get("hop", 0)): h for h in curr.get("hops", [])}
+        all_hops = sorted(set(prev_hops.keys()) | set(curr_hops.keys()))
+
+        changed_ip = 0
+        changed_asn = 0
+        rtt_worse = 0
+        details = []
+
+        for hop_n in all_hops:
+            a = prev_hops.get(hop_n, {})
+            b = curr_hops.get(hop_n, {})
+            ip_a = str(a.get("ip", "-"))
+            ip_b = str(b.get("ip", "-"))
+            asn_a = str(a.get("asn", "-"))
+            asn_b = str(b.get("asn", "-"))
+
+            avg_a = self._avg_from_list(a.get("rtts_ms", []))
+            avg_b = self._avg_from_list(b.get("rtts_ms", []))
+
+            changes = []
+            if ip_a != ip_b:
+                changed_ip += 1
+                changes.append(f"IP {ip_a} -> {ip_b}")
+            if asn_a != asn_b:
+                changed_asn += 1
+                changes.append(f"ASN {asn_a} -> {asn_b}")
+            if avg_a is not None and avg_b is not None and (avg_b - avg_a) > 10.0:
+                rtt_worse += 1
+                changes.append(f"RTT {avg_a:.2f} -> {avg_b:.2f} ms")
+
+            if changes:
+                details.append(f"Salto {hop_n}: " + "; ".join(changes))
+
+        summary = [
+            f"Trazas comparadas:",
+            f"- Anterior: {prev.get('timestamp', '-')}, destino {prev.get('target', '-')}",
+            f"- Actual: {curr.get('timestamp', '-')}, destino {curr.get('target', '-')}",
+            "",
+            f"Cambios IP: {changed_ip}",
+            f"Cambios ASN: {changed_asn}",
+            f"Saltos con RTT empeorado (>10 ms): {rtt_worse}",
+        ]
+        if details:
+            summary.append("")
+            summary.append("Detalle:")
+            summary.extend(details[:25])
+
+        QMessageBox.information(self, "Comparación de rutas", "\n".join(summary))
+
+    @staticmethod
+    def _avg_from_list(values: List[float]) -> Optional[float]:
+        if not values:
+            return None
+        return sum(values) / len(values)
 
 
 def main() -> None:
