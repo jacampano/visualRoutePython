@@ -8,6 +8,7 @@ Esta aplicación en Python permite:
 - Guardar historial local de trazas, cargar la última y comparar las dos más recientes.
 - Exportar la traza actual a JSON/CSV y generar reporte HTML.
 - Definir umbrales de calidad (RTT y delta entre saltos) y mostrar alertas automáticas.
+- Seleccionar modo de resolución/traza de IP: `auto`, `ipv4` o `ipv6`.
 
 ## Requisitos
 - Python 3.10+
