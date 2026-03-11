@@ -13,6 +13,7 @@ Esta aplicación en Python permite:
 - Agrupar nodos en mapa con clustering y spiderfy al acercar/expandir.
 - Enriquecer nodos con AS Name, reverse DNS y tipo de red (mobile/hosting/proxy).
 - Elegir proveedor de geolocalización (`ip-api` o `ipwhois`) con caché local en `geo_cache.json`.
+- Usar tabla avanzada con búsqueda, filtro por ciudad y resaltado de diferencias frente a la traza anterior.
 
 ## Requisitos
 - Python 3.10+

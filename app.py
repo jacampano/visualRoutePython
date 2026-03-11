@@ -395,10 +395,26 @@ class HopsWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Detalle de nodos y latencias")
         self.resize(780, 460)
+        self.all_hops: List[HopInfo] = []
+        self.prev_hops_by_number: Dict[int, HopInfo] = {}
 
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
+
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Buscar:"))
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("IP, ciudad, país, ASN, owner...")
+        self.search_input.textChanged.connect(self.refresh_table)
+        controls.addWidget(self.search_input, stretch=1)
+
+        controls.addWidget(QLabel("Ciudad:"))
+        self.city_filter = QComboBox()
+        self.city_filter.addItem("Todas")
+        self.city_filter.currentTextChanged.connect(self.refresh_table)
+        controls.addWidget(self.city_filter)
+        layout.addLayout(controls)
 
         self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
@@ -419,31 +435,99 @@ class HopsWindow(QMainWindow):
         layout.addWidget(self.table)
 
     def clear_rows(self) -> None:
+        self.all_hops = []
+        self.prev_hops_by_number = {}
+        self.search_input.clear()
+        self.city_filter.clear()
+        self.city_filter.addItem("Todas")
         self.table.setRowCount(0)
 
     def add_hop(self, hop: HopInfo) -> None:
-        row = self.table.rowCount()
-        self.table.insertRow(row)
+        self.all_hops.append(hop)
+        self._sync_city_filter()
+        self.refresh_table()
 
-        coords = ""
-        if hop.lat is not None and hop.lon is not None:
-            coords = f"{hop.lat:.4f}, {hop.lon:.4f}"
+    def set_previous_hops(self, prev_hops: List[HopInfo]) -> None:
+        self.prev_hops_by_number = {h.hop: h for h in prev_hops}
+        self.refresh_table()
 
-        values = [
-            str(hop.hop),
-            hop.ip,
-            f"{hop.avg_rtt:.2f}" if hop.avg_rtt is not None else "N/A",
-            ", ".join(f"{v:.2f}" for v in hop.rtts_ms) if hop.rtts_ms else "N/A",
-            hop.city or "N/A",
-            hop.country or "N/A",
-            hop.org or hop.isp or "N/A",
-            hop.asn or "N/A",
-            coords or "N/A",
-        ]
-        for col, val in enumerate(values):
-            item = QTableWidgetItem(val)
-            item.setTextAlignment(Qt.AlignCenter)
-            self.table.setItem(row, col, item)
+    def refresh_table(self) -> None:
+        query = self.search_input.text().strip().lower()
+        selected_city = self.city_filter.currentText()
+        self.table.setRowCount(0)
+
+        filtered = []
+        for hop in self.all_hops:
+            city_value = hop.city or "N/A"
+            if selected_city and selected_city != "Todas" and city_value != selected_city:
+                continue
+            haystack = " ".join(
+                [
+                    str(hop.hop),
+                    hop.ip,
+                    hop.hostname,
+                    hop.city,
+                    hop.country,
+                    hop.org,
+                    hop.isp,
+                    hop.asn,
+                ]
+            ).lower()
+            if query and query not in haystack:
+                continue
+            filtered.append(hop)
+
+        for hop in filtered:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+
+            coords = ""
+            if hop.lat is not None and hop.lon is not None:
+                coords = f"{hop.lat:.4f}, {hop.lon:.4f}"
+
+            values = [
+                str(hop.hop),
+                hop.ip,
+                f"{hop.avg_rtt:.2f}" if hop.avg_rtt is not None else "N/A",
+                ", ".join(f"{v:.2f}" for v in hop.rtts_ms) if hop.rtts_ms else "N/A",
+                hop.city or "N/A",
+                hop.country or "N/A",
+                hop.org or hop.isp or "N/A",
+                hop.asn or "N/A",
+                coords or "N/A",
+            ]
+            for col, val in enumerate(values):
+                item = QTableWidgetItem(val)
+                item.setTextAlignment(Qt.AlignCenter)
+                if self._is_changed_vs_previous(hop):
+                    item.setBackground(Qt.yellow)
+                self.table.setItem(row, col, item)
+
+    def _sync_city_filter(self) -> None:
+        current = self.city_filter.currentText()
+        cities = sorted({(h.city or "N/A") for h in self.all_hops})
+        self.city_filter.blockSignals(True)
+        self.city_filter.clear()
+        self.city_filter.addItem("Todas")
+        self.city_filter.addItems(cities)
+        if current in cities or current == "Todas":
+            self.city_filter.setCurrentText(current)
+        else:
+            self.city_filter.setCurrentText("Todas")
+        self.city_filter.blockSignals(False)
+
+    def _is_changed_vs_previous(self, hop: HopInfo) -> bool:
+        prev = self.prev_hops_by_number.get(hop.hop)
+        if not prev:
+            return False
+        if prev.ip != hop.ip:
+            return True
+        if prev.asn != hop.asn:
+            return True
+        if prev.avg_rtt is not None and hop.avg_rtt is not None:
+            if abs(hop.avg_rtt - prev.avg_rtt) > 10.0:
+                return True
+        return False
 
 
 class MainWindow(QMainWindow):
@@ -560,6 +644,7 @@ class MainWindow(QMainWindow):
         self.status.setText(f"Ejecutando traceroute a {target}...")
         self.current_hops = []
         self.hops_window.clear_rows()
+        self.hops_window.set_previous_hops(self._get_last_history_hops())
         self._render_map([])
 
         self.worker = TracerouteWorker(
@@ -585,6 +670,8 @@ class MainWindow(QMainWindow):
     def on_finish(self, hops: List[HopInfo]) -> None:
         self.run_btn.setEnabled(True)
         self.current_hops = list(hops)
+        self.hops_window.set_previous_hops(self._get_last_history_hops())
+        self.hops_window.refresh_table()
         geolocated = [h for h in hops if h.lat is not None and h.lon is not None]
         self._render_map(geolocated)
         self._save_trace_to_history(hops)
@@ -1178,9 +1265,16 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Historial", "No hay trazas guardadas.")
             return
         last = self.trace_history[-1]
+        prev = self.trace_history[-2] if len(self.trace_history) > 1 else None
         hops = [self._dict_to_hop(h) for h in last.get("hops", [])]
         self.current_hops = hops
         self.hops_window.clear_rows()
+        prev_hops = (
+            [self._dict_to_hop(h) for h in prev.get("hops", [])]
+            if prev is not None
+            else []
+        )
+        self.hops_window.set_previous_hops(prev_hops)
         for hop in hops:
             self.hops_window.add_hop(hop)
         geolocated = [h for h in hops if h.lat is not None and h.lon is not None]
@@ -1256,6 +1350,12 @@ class MainWindow(QMainWindow):
         if not values:
             return None
         return sum(values) / len(values)
+
+    def _get_last_history_hops(self) -> List[HopInfo]:
+        if not self.trace_history:
+            return []
+        item = self.trace_history[-1]
+        return [self._dict_to_hop(h) for h in item.get("hops", [])]
 
     def _get_threshold(self, text: str, fallback: float) -> float:
         try:
