@@ -7,6 +7,7 @@ Esta aplicación en Python permite:
 - Abrir una ventana adicional con detalle de nodos y tiempos de respuesta.
 - Guardar historial local de trazas, cargar la última y comparar las dos más recientes.
 - Exportar la traza actual a JSON/CSV y generar reporte HTML.
+- Definir umbrales de calidad (RTT y delta entre saltos) y mostrar alertas automáticas.
 
 ## Requisitos
 - Python 3.10+
