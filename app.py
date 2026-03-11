@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import requests
-from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -354,6 +354,9 @@ class MainWindow(QMainWindow):
         self.current_hops: List[HopInfo] = []
         self.trace_history: List[dict] = []
         self.history_file = Path("trace_history.json")
+        self.continuous_timer = QTimer(self)
+        self.continuous_timer.timeout.connect(self._run_continuous_tick)
+        self.continuous_running = False
         self.hops_window = HopsWindow()
         self._load_history_file()
 
@@ -416,6 +419,15 @@ class MainWindow(QMainWindow):
         self.report_btn.clicked.connect(self.export_html_report)
         top.addWidget(self.report_btn)
 
+        top.addWidget(QLabel("Cada (min):"))
+        self.interval_input = QLineEdit("5")
+        self.interval_input.setMaximumWidth(55)
+        top.addWidget(self.interval_input)
+
+        self.continuous_btn = QPushButton("Iniciar continuo")
+        self.continuous_btn.clicked.connect(self.toggle_continuous_mode)
+        top.addWidget(self.continuous_btn)
+
         layout.addLayout(top)
 
         self.status = QLabel("Listo")
@@ -470,6 +482,10 @@ class MainWindow(QMainWindow):
         self.status.setText(
             f"Completado: {len(hops)} saltos detectados, {len(geolocated)} geolocalizados."
         )
+        if self.continuous_running:
+            self.status.setText(
+                f"Completado: {len(hops)} saltos. Modo continuo activo."
+            )
 
     def on_fail(self, msg: str) -> None:
         self.run_btn.setEnabled(True)
@@ -1283,6 +1299,34 @@ class MainWindow(QMainWindow):
             "Reporte generado",
             f"Reporte HTML generado:\n- {report_path}",
         )
+
+    def toggle_continuous_mode(self) -> None:
+        if self.continuous_running:
+            self.continuous_running = False
+            self.continuous_timer.stop()
+            self.continuous_btn.setText("Iniciar continuo")
+            self.status.setText("Modo continuo detenido.")
+            return
+
+        interval_min = self._get_threshold(self.interval_input.text(), 5.0)
+        interval_ms = int(interval_min * 60_000)
+        self.continuous_running = True
+        self.continuous_timer.start(interval_ms)
+        self.continuous_btn.setText("Detener continuo")
+        self.status.setText(
+            f"Modo continuo activo (cada {interval_min:.2f} min). Ejecutando ahora..."
+        )
+        self._run_continuous_tick()
+
+    def _run_continuous_tick(self) -> None:
+        if not self.continuous_running:
+            return
+        if self.worker and self.worker.isRunning():
+            return
+        if not self.ip_input.text().strip():
+            self.status.setText("Modo continuo pausado: falta destino IP.")
+            return
+        self.start_trace()
 
 
 def main() -> None:
